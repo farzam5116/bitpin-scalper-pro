@@ -1,0 +1,227 @@
+
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bitpin Scalper Pro</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b1220;color:#e5e7eb;font-family:Tahoma,Arial}
+header{padding:20px;background:#111c30;text-align:center}
+h2{color:#38bdf8;margin:5px}
+main{padding:14px;max-width:900px;margin:auto}
+.card{background:#152238;border:1px solid #263750;border-radius:13px;padding:15px;margin:12px 0}
+.price{font-size:25px;color:#38bdf8;font-weight:bold}
+button{background:#087fce;color:white;border:0;border-radius:8px;padding:12px 20px;font-size:15px;margin:4px}
+button.active{background:#059669}
+#chart{height:350px;width:100%}
+.green{color:#22c55e}.red{color:#ef4444}
+.muted{color:#94a3b8;font-size:12px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.value{font-size:18px;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+<h2>BITPIN SCALPER PRO</h2>
+<div class="muted">پنل هوشمند تحلیل بیت‌کوین</div>
+</header>
+<main>
+<div class="card">
+<div>بازار BTC / IRT</div>
+<div class="price" id="price">در حال دریافت...</div>
+<div class="muted" id="status">در حال اتصال به بیت‌پین</div>
+</div>
+
+<div class="card">
+<b>انتخاب تایم‌فریم</b><br>
+<button id="b5" class="active" onclick="changeTF('5m')">۵ دقیقه</button>
+<button id="b15" onclick="changeTF('15m')">۱۵ دقیقه</button>
+</div>
+
+<div class="card">
+<b>نمودار کندلی و میانگین متحرک</b>
+<div id="chart"></div>
+</div>
+
+<div class="grid">
+<div class="card">
+<div class="muted">وضعیت روند</div>
+<div class="value" id="trend">---</div>
+</div>
+<div class="card">
+<div class="muted">سیگنال MACD</div>
+<div class="value" id="macd">---</div>
+</div>
+<div class="card">
+<div class="muted">قیمت ورود تحلیلی</div>
+<div class="value" id="entry">---</div>
+</div>
+<div class="card">
+<div class="muted">حد ضرر تحلیلی</div>
+<div class="value red" id="stop">---</div>
+</div>
+<div class="card">
+<div class="muted">هدف اول</div>
+<div class="value green" id="target1">---</div>
+</div>
+<div class="card">
+<div class="muted">هدف دوم</div>
+<div class="value green" id="target2">---</div>
+</div>
+</div>
+
+<div class="card">
+<b>نتیجه تحلیل</b>
+<h2 id="signal">در انتظار داده بازار</h2>
+<div class="muted" id="detail">اطلاعات پس از دریافت کندل‌ها نمایش داده می‌شود.</div>
+</div>
+
+<div class="card">
+<button onclick="loadData()">بروزرسانی اطلاعات</button>
+<div class="muted" id="updated">هنوز بروزرسانی نشده</div>
+</div>
+
+<div class="muted">
+این ابزار صرفاً تحلیلی است. سفارش واقعی ثبت نمی‌کند و سیگنال‌ها تضمین سود نیستند.
+</div>
+</main>
+
+<script>
+const API='https://api.bitpin.org';
+let tf='5m', candles=[], chart, candleSeries, maSeries;
+
+function average(values,n){
+ return values.map((v,i)=>{
+  if(i<n-1)return null;
+  return values.slice(i-n+1,i+1).reduce((a,b)=>a+b,0)/n;
+ });
+}
+
+function ema(values,n){
+ let result=[], k=2/(n+1), prev=values[0];
+ values.forEach((v,i)=>{
+  prev=i===0?v:v*k+prev*(1-k);
+  result.push(prev);
+ });
+ return result;
+}
+
+function parseCandles(json){
+ let a=Array.isArray(json)?json:
+ (json.results||json.data||json.candles||[]);
+ if(!Array.isArray(a))throw Error('ساختار اطلاعات کندل ناشناخته است');
+ return a.map(c=>{
+  if(Array.isArray(c)){
+   return {time:Math.floor(Number(c[0])>1e12?Number(c[0])/1000:Number(c[0])),
+   open:+c[1],high:+c[2],low:+c[3],close:+c[4],volume:+c[5]||0};
+  }
+  let t=Number(c.timestamp??c.time);
+  return {
+   time:Math.floor(t>1e12?t/1000:t),
+   open:+(c.open??c.o),high:+(c.high??c.h),
+   low:+(c.low??c.l),close:+(c.close??c.c),
+   volume:+(c.volume??c.v??0)
+  };
+ }).filter(c=>c.time&&c.open>0&&c.high>0&&c.low>0&&c.close>0)
+ .sort((a,b)=>a.time-b.time);
+}
+
+function initChart(){
+ chart=LightweightCharts.createChart(document.getElementById('chart'),{
+  width:document.getElementById('chart').clientWidth,
+  height:350,
+  layout:{background:{color:'#152238'},textColor:'#d1d5db'},
+  grid:{vertLines:{color:'#263750'},horzLines:{color:'#263750'}},
+  timeScale:{timeVisible:true,borderColor:'#334155'},
+  rightPriceScale:{borderColor:'#334155'}
+ });
+ candleSeries=chart.addCandlestickSeries({
+  upColor:'#22c55e',downColor:'#ef4444',
+  borderVisible:false,wickUpColor:'#22c55e',
+  wickDownColor:'#ef4444'
+ });
+ maSeries=chart.addLineSeries({color:'#38bdf8',lineWidth:2});
+ window.addEventListener('resize',()=>{
+  chart.applyOptions({width:document.getElementById('chart').clientWidth});
+ });
+}
+
+async function loadData(){
+ document.getElementById('status').textContent='در حال دریافت اطلاعات...';
+ try{
+  const now=Math.floor(Date.now()/1000);
+  const from=now-1000*(tf==='5m'?5:15)*60;
+  const url=API+'/api/v1/mkt/candles/?symbol=BTC_IRT&res='+tf+'&from='+from+'&to='+now;
+  const response=await fetch(url);
+  if(!response.ok)throw Error('خطای اتصال: '+response.status);
+  const json=await response.json();
+  candles=parseCandles(json);
+  if(candles.length<35)throw Error('تعداد کندل‌ها برای تحلیل کافی نیست');
+  candleSeries.setData(candles);
+  analyze();
+  document.getElementById('status').textContent='اتصال موفق به داده‌های بازار';
+  document.getElementById('updated').textContent='آخرین بروزرسانی: '+new Date().toLocaleTimeString('fa-IR');
+ }catch(e){
+  document.getElementById('status').textContent='خطا: '+e.message;
+  document.getElementById('signal').textContent='داده دریافت نشد';
+  document.getElementById('detail').textContent='اتصال API یا ساختار پاسخ را باید بررسی کنیم.';
+ }
+}
+
+function analyze(){
+ const closes=candles.map(c=>c.close);
+ const ma=average(closes,20);
+ maSeries.setData(candles.filter((c,i)=>ma[i]!==null).map((c,i)=>({time:c.time,value:ma[candles.indexOf(c)]})));
+ chart.timeScale().fitContent();
+
+ const fast=ema(closes,12), slow=ema(closes,26);
+ const line=fast.map((v,i)=>v-slow[i]);
+ const sig=ema(line,9);
+ const i=closes.length-1;
+ const price=closes[i];
+ const bullish=price>ma[i]&&fast[i]>slow[i]&&line[i]>sig[i];
+ const bearish=price<ma[i]&&fast[i]<slow[i]&&line[i]<sig[i];
+
+ document.getElementById('price').textContent=price.toLocaleString('fa-IR')+' تومان';
+ document.getElementById('trend').textContent=price>ma[i]?'صعودی':'نزولی';
+ document.getElementById('trend').className='value '+(price>ma[i]?'green':'red');
+ document.getElementById('macd').textContent=line[i]>sig[i]?'مثبت':'منفی';
+
+ let signal=bullish?'LONG':bearish?'SHORT':'WAIT';
+ document.getElementById('signal').textContent=signal;
+ document.getElementById('signal').className=bullish?'green':bearish?'red':'';
+ document.getElementById('detail').textContent=
+ bullish?'روند و MACD هر دو صعودی هستند.':
+ bearish?'روند و MACD هر دو نزولی هستند.':
+ 'شرایط ورود هم‌زمان تأیید نشده است.';
+
+ const recent=candles.slice(-14);
+ const atr=recent.reduce((s,c)=>s+(c.high-c.low),0)/recent.length;
+ const entry=price;
+ const stop=bullish?price-1.5*atr:price+1.5*atr;
+ const t1=bullish?price+1.5*atr:price-1.5*atr;
+ const t2=bullish?price+2.5*atr:price-2.5*atr;
+
+ const fmt=n=>Math.round(n).toLocaleString('fa-IR')+' تومان';
+ document.getElementById('entry').textContent=fmt(entry);
+ document.getElementById('stop').textContent=fmt(stop);
+ document.getElementById('target1').textContent=fmt(t1);
+ document.getElementById('target2').textContent=fmt(t2);
+}
+
+function changeTF(value){
+ tf=value;
+ document.getElementById('b5').classList.toggle('active',value==='5m');
+ document.getElementById('b15').classList.toggle('active',value==='15m');
+ loadData();
+}
+
+initChart();
+loadData();
+setInterval(loadData,60000);
+</script>
+</body>
+</html>
